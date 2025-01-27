@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY = 'learnit06/node-app'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        K8S_REPO = 'https://github.com/learnit06/k8s-manifests.git'
+        K8S_CREDENTIALS = 'github-token'
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git credentialsId: 'github-token', 
+                    url: 'https://github.com/Learnit06/NodeApp',
+                    branch: 'main'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh '''
+                    docker.build('learnit06/node-app:1')
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    sh '''
+                    echo "$DOCKERHUB_CREDS_USR:$DOCKERHUB_CREDS_PSW" | docker login -u "$DOCKERHUB_CREDS_USR" --password-stdin
+                    docker push $REGISTRY:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Update Kubernetes Manifests') {
+            steps {
+                script {
+                    git credentialsId: "${K8S_CREDENTIALS}", 
+                        url: "${K8S_REPO}",
+                        branch: 'main'
+                    sh '''
+                    sed -i "s|image: .*|image: $REGISTRY:$IMAGE_TAG|g" deploy.yaml
+                    git add deploy.yaml
+                    git commit -m "Updated image to $REGISTRY:$IMAGE_TAG"
+                    git push
+                    '''
+                }
+            }
+        }
+
+        stage('Trigger Argo CD Sync') {
+            steps {
+                script {
+                    sh '''
+                    curl -X POST http://argocd-server.argocd.svc.cluster.local:8080/api/v1/applications/node-app/sync \
+                    -H "Authorization: Bearer <argocd-token>"
+                    '''
+                }
+            }
+        }
+    }
+}
+
